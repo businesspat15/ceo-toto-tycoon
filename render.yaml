@@ -1,0 +1,20 @@
+﻿services:
+  - type: web
+    name: ceo-toto-backend
+    repo: <YOUR_GIT_REMOTE_URL>
+    branch: main
+    env:
+      - key: SUPABASE_URL
+        from: env
+      - key: SUPABASE_SERVICE_KEY
+        from: env
+      - key: TELEGRAM_BOT_TOKEN
+        from: env
+      - key: TELEGRAM_SECRET_PATH
+        from: env
+    buildCommand: npm install
+    startCommand: node index.js
+    plan: free
+    region: oregon
+    autoDeploy: true
+    rootDir: backend
