@@ -15,31 +15,41 @@ dotenv.config();
 
 const app = express();
 
-// --- CORS setup (replace existing block) ---
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || ''; // e.g. https://ceo-toto-tycoon.vercel.app
+app.set("trust proxy", 1);
 
-// Build allowed origins: include production origin (if set) and localhost for dev
-const allowedOrigins = [];
-if (FRONTEND_ORIGIN) allowedOrigins.push(FRONTEND_ORIGIN);
-// local dev origin used by Vite
-allowedOrigins.push('http://localhost:5173');
-
-// CORS options that allow same-origin requests and requests from allowedOrigins
-const corsOptions = {
-  origin: function(origin, callback) {
-    // allow requests with no origin (curl, mobile apps, server-to-server)
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      return callback(null, true);
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    // Allowed origins: frontend + localhost (dev)
+    const allowed = [process.env.FRONTEND_ORIGIN, 'http://localhost:5173'].filter(Boolean);
+    const origin = req.headers.origin;
+    if (origin && allowed.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+    } else if (!origin) {
+      // requests without Origin (curl, server-to-server)
+      res.setHeader('Access-Control-Allow-Origin', '*');
+    } else {
+      // origin not allowed — still respond to preflight but without allowing CORS
+      res.setHeader('Access-Control-Allow-Origin', 'null');
     }
-    const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
-    return callback(new Error(msg), false);
-  },
-  credentials: true,
-  optionsSuccessStatus: 200
-};
 
-app.use(cors(corsOptions));
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+app.use(cors({
+  origin: ["http://localhost:5173", process.env.FRONTEND_ORIGIN].filter(Boolean),
+  methods: "GET,POST,PATCH,PUT,DELETE,OPTIONS",
+  allowedHeaders: "Content-Type, Authorization",
+  credentials: true
+}));
+
+app.options("*", cors());
+
+
 app.use(express.json());
 
 // Environment variables (from .env)
