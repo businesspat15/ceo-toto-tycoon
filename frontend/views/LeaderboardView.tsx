@@ -1,5 +1,4 @@
-// frontend/views/LeaderboardView.tsx
-import React, { useEffect, useState } from 'react';
+﻿import React, { useEffect, useState } from 'react';
 import { UserState } from '../types';
 import { formatNumber } from '../constants';
 
@@ -41,7 +40,6 @@ const LeaderboardView: React.FC<LeaderboardViewProps> = ({ user }) => {
       }
     }
     load();
-    // optional: poll every 10s to keep leaderboard fresh
     const timer = setInterval(load, 10000);
     return () => {
       aborted = true;
@@ -49,7 +47,6 @@ const LeaderboardView: React.FC<LeaderboardViewProps> = ({ user }) => {
     };
   }, []);
 
-  // Compute rank of current user in the fetched list
   const userIndex = users.findIndex(u => u.id === user.id || u.username === user.username);
   const userRank = userIndex >= 0 ? userIndex + 1 : users.length + 1;
 
@@ -61,7 +58,6 @@ const LeaderboardView: React.FC<LeaderboardViewProps> = ({ user }) => {
       </div>
 
       <div className="bg-slate-800/50 rounded-xl border border-slate-700 overflow-hidden">
-        {/* Current User Rank Strip */}
         <div className="bg-gradient-to-r from-lime-900/40 to-slate-800 p-4 border-b border-slate-700 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-full bg-lime-500 flex items-center justify-center text-slate-900 font-bold text-sm">
@@ -75,7 +71,6 @@ const LeaderboardView: React.FC<LeaderboardViewProps> = ({ user }) => {
           <div>
             <button
               onClick={() => {
-                // immediate refresh
                 (async () => {
                   try {
                     const res = await fetch(`${API_BASE}/api/leaderboard?limit=50`, { credentials: 'include' });
@@ -93,7 +88,6 @@ const LeaderboardView: React.FC<LeaderboardViewProps> = ({ user }) => {
           </div>
         </div>
 
-        {/* List */}
         <div className="divide-y divide-slate-700/50">
           {loading && (
             <div className="p-4 text-slate-400">Loading...</div>
