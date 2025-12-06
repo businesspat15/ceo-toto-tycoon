@@ -17,10 +17,15 @@ const app = express();
 
 app.set("trust proxy", 1);
 
+// Normalize FRONTEND_ORIGIN to avoid trailing slash mismatches
+const RAW_FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || '';
+const FRONTEND_ORIGIN = RAW_FRONTEND_ORIGIN.replace(/\/$/, ''); // e.g. "https://...vercel.app"
+
+// EARLY OPTIONS / PRE-FLIGHT SHORT-CIRCUIT
 app.use((req, res, next) => {
   if (req.method === 'OPTIONS') {
     // Allowed origins: frontend + localhost (dev)
-    const allowed = [process.env.FRONTEND_ORIGIN, 'http://localhost:5173'].filter(Boolean);
+    const allowed = [FRONTEND_ORIGIN, 'http://localhost:5173'].filter(Boolean);
     const origin = req.headers.origin;
     if (origin && allowed.includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
@@ -41,14 +46,13 @@ app.use((req, res, next) => {
 });
 
 app.use(cors({
-  origin: ["http://localhost:5173", process.env.FRONTEND_ORIGIN].filter(Boolean),
+  origin: ["http://localhost:5173", FRONTEND_ORIGIN].filter(Boolean),
   methods: "GET,POST,PATCH,PUT,DELETE,OPTIONS",
   allowedHeaders: "Content-Type, Authorization",
   credentials: true
 }));
 
 app.options("*", cors());
-
 
 app.use(express.json());
 
