@@ -278,12 +278,8 @@ app.post('/api/mine', async (req, res) => {
   }
 });
 
-/**
- * Telegram webhook (optional) - handle /start referrals
- * Set webhook to: https://<your-backend>/telegram/webhook or with TELEGRAM_SECRET_PATH
- */
-// robust Telegram webhook handler (replace existing handler)
-app.post(`/telegram/webhook${TELEGRAM_SECRET_PATH ? `/${TELEGRAM_SECRET_PATH}` : ''}`, async (req, res) => {
+
+app.post(`/telegram/webhook${TELEGRAM_SECRET_PATH ? `/${TELEGRAM_SECRET_PATH}` : ''}`, async (req, res) => { 
   try {
     console.log('[telegram webhook] headers:', req.headers);
     console.log('[telegram webhook] raw body:', JSON.stringify(req.body).slice(0, 2000)); // log up to 2k chars
