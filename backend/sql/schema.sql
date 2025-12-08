@@ -1,5 +1,6 @@
--- schema.sql
--- Run in Supabase > SQL editor
+-- ============================================================
+-- STEP 1 — USERS TABLE  (Run only if not already created)
+-- ============================================================
 create table if not exists public.users (
   id text primary key,
   username text,
@@ -13,12 +14,28 @@ create table if not exists public.users (
   created_at timestamptz default now()
 );
 
--- optional helper function to reward referrer (increment count and add coins)
+-- ============================================================
+-- STEP 2 — FIXED REFERRAL FUNCTION (RPC)
+-- RETURNS new referral count
+-- Also adds +100 coins to referrer (remove if you don’t want)
+-- ============================================================
 create or replace function public.increment_referral_bonus(ref_id text)
-returns void language plpgsql as $$
+returns table(new_count int)
+language plpgsql
+security definer
+as $$
 begin
-  update public.users set referrals_count = coalesce(referrals_count,0) + 1,
-                         coins = coalesce(coins,0) + 100
-  where id = ref_id;
+  update public.users
+  set referrals_count = coalesce(referrals_count, 0) + 1,
+      coins = coalesce(coins, 0) + 100  -- delete this line if NO reward
+  where id = ref_id
+  returning referrals_count into new_count;
+
+  -- if no matching id found
+  if not found then
+    new_count := 0;
+  end if;
+
+  return;
 end;
 $$;
