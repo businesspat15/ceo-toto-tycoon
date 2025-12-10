@@ -1,9 +1,6 @@
--- ============================================================================
--- FULL SCHEMA & RPCs for CEO TOTO Tycoon
--- Includes: users, transactions, businesses, manual_refer_by_id, purchase_business
--- ============================================================================
-
--- 1) users table
+-- ============================
+-- 1) USERS TABLE
+-- ============================
 create table if not exists public.users (
   id text primary key,
   username text,
@@ -13,11 +10,14 @@ create table if not exists public.users (
   last_mine bigint default 0,
   referrals_count int default 0,
   referred_by text default null,
-  subscribed boolean default false,
+  subscribed boolean default true,
   created_at timestamptz default now()
 );
 
--- 2) transactions table
+
+-- ============================
+-- 2) TRANSACTIONS TABLE
+-- ============================
 create table if not exists public.transactions (
   id bigserial primary key,
   user_id text not null,
@@ -27,25 +27,20 @@ create table if not exists public.transactions (
   created_at timestamptz default now()
 );
 
--- 3) businesses table (simple global totals per business)
+
+-- ============================
+-- 3) BUSINESSES TABLE
+-- ============================
 create table if not exists public.businesses (
   business text primary key,
-  total_coins_invested bigint default 0
+  total_coins_invested bigint default 0,
+  unit_cost bigint default 1000
 );
 
--- Optional: seed some common business rows (won't overwrite existing)
-insert into public.businesses (business, total_coins_invested) values
-('DAPP', 0),
-('TOTO_VAULT', 0),
-('CIFCI_STABLE', 0),
-('TYPOGRAM', 0),
-('APPLE', 0),
-('BITCOIN', 0)
-on conflict (business) do nothing;
 
--- 4) Atomic referral function for "ref_<INVITER_ID>" deep links.
--- CALL example:
--- select public.manual_refer_by_id('12345', '67890', 'tg_username');
+-- ============================
+-- 4) REFERRAL FUNCTION
+-- ============================
 create or replace function public.manual_refer_by_id(
   referrer_id text,
   referred_id text,
@@ -59,29 +54,24 @@ declare
   self_row record;
   updated boolean := false;
 begin
-  -- find inviter by id
   select * into ref_row from public.users where id = referrer_id limit 1;
   if not found then
     return jsonb_build_object('success', false, 'error', 'inviter_not_found');
   end if;
 
-  -- prevent self-referral
   if ref_row.id = referred_id then
     return jsonb_build_object('success', false, 'error', 'self_referral');
   end if;
 
-  -- lock referred user's row (if exists)
   select id, referred_by into self_row from public.users where id = referred_id for update;
 
   if not found then
-    -- create referred user and attach referred_by
     insert into public.users
       (id, username, coins, businesses, level, last_mine, referrals_count, referred_by, subscribed, created_at)
     values
       (referred_id, referred_username, 100, '{}'::jsonb, 1, 0, 0, ref_row.id, false, now());
     updated := true;
   else
-    -- if user exists and hasn't been referred (or already referred to same referrer), set referred_by
     if self_row.referred_by is null or self_row.referred_by = ref_row.id then
       update public.users set referred_by = ref_row.id where id = referred_id;
       updated := true;
@@ -91,7 +81,6 @@ begin
   end if;
 
   if updated then
-    -- reward inviter
     update public.users
       set coins = coins + 100,
           referrals_count = coalesce(referrals_count,0) + 1
@@ -107,10 +96,10 @@ begin
 end;
 $$;
 
--- 5) Atomic purchase function
--- CALL example:
--- select public.purchase_business('DAPP', '12345', 2, 1000);
--- Returns jsonb containing success, coins (new), user_businesses JSON, total_invested
+
+-- ============================
+-- 5) PURCHASE BUSINESS FUNCTION
+-- ============================
 create or replace function public.purchase_business(
   p_business text,
   p_user_id text,
@@ -126,82 +115,128 @@ declare
   total_cost bigint;
   new_coins bigint;
   new_businesses jsonb;
-  biz record;
+  total_qty bigint;
 begin
   if p_qty is null or p_qty <= 0 then
     return jsonb_build_object('success', false, 'error', 'invalid_qty');
   end if;
 
-  if p_unit_cost is null or p_unit_cost < 0 then
-    return jsonb_build_object('success', false, 'error', 'invalid_price');
-  end if;
-
   total_cost := p_unit_cost * p_qty;
 
-  -- lock user's row
   select * into usr from public.users where id = p_user_id for update;
   if not found then
     return jsonb_build_object('success', false, 'error', 'user_not_found');
   end if;
 
   if coalesce(usr.coins,0) < total_cost then
-    return jsonb_build_object('success', false, 'error', 'insufficient_funds', 'needed', total_cost, 'have', coalesce(usr.coins,0));
+    return jsonb_build_object(
+      'success', false,
+      'error', 'insufficient_funds',
+      'needed', total_cost,
+      'have', coalesce(usr.coins,0)
+    );
   end if;
 
-  -- compute current qty from JSON (safe)
-  if usr.businesses is not null then
-    begin
-      cur_qty := (usr.businesses ->> p_business)::int;
-    exception when others then
-      cur_qty := 0;
-    end;
-    if cur_qty is null then cur_qty := 0; end if;
-  else
+  begin
+    cur_qty := (usr.businesses ->> p_business)::int;
+  exception when others then
     cur_qty := 0;
-  end if;
+  end;
+  if cur_qty is null then cur_qty := 0; end if;
 
-  -- update user's businesses JSON: set new qty = cur_qty + p_qty
-  new_businesses := jsonb_set(coalesce(usr.businesses, '{}'::jsonb), array[p_business], to_jsonb(cur_qty + p_qty), true);
+  new_businesses := jsonb_set(
+    coalesce(usr.businesses, '{}'::jsonb),
+    array[p_business],
+    to_jsonb(cur_qty + p_qty),
+    true
+  );
 
   new_coins := coalesce(usr.coins,0) - total_cost;
 
-  -- update users row
   update public.users
     set coins = new_coins,
         businesses = new_businesses
   where id = p_user_id;
 
-  -- ensure a businesses row exists for p_business
-  insert into public.businesses (business, total_coins_invested)
-  values (p_business, 0)
-  on conflict (business) do nothing;
+  insert into public.businesses (business, total_coins_invested, unit_cost)
+  values (p_business, 0, p_unit_cost)
+  on conflict (business) do update
+    set unit_cost = excluded.unit_cost;
 
-  -- atomically increment total_coins_invested
+  select coalesce(sum((u.businesses ->> p_business)::bigint),0)
+    into total_qty
+    from public.users u;
+
   update public.businesses
-    set total_coins_invested = coalesce(total_coins_invested,0) + total_cost
+    set total_coins_invested = total_qty * p_unit_cost
   where business = p_business;
 
-  -- insert transaction record
   insert into public.transactions (user_id, amount, type, note)
-    values (p_user_id, total_cost, 'purchase', 'Bought ' || p_qty || ' x ' || p_business || ' @' || p_unit_cost);
-
-  -- return useful info
-  select total_coins_invested into biz from public.businesses where business = p_business;
+    values (p_user_id, total_cost, 'purchase',
+      'Bought ' || p_qty || ' x ' || p_business || ' @' || p_unit_cost);
 
   return jsonb_build_object(
     'success', true,
     'coins', new_coins,
-    'user_businesses', (select businesses from public.users where id = p_user_id),
-    'total_invested', coalesce(biz.total_coins_invested,0)
+    'user_businesses', new_businesses,
+    'total_invested', total_qty * p_unit_cost
   );
-exception
-  when others then
-    -- bubble up error message for debugging (can be restricted in production)
-    return jsonb_build_object('success', false, 'error', 'internal_error', 'message', sqlerrm);
 end;
 $$;
 
--- 6) Helpful index for leaderboard sorting
-create index if not exists idx_users_coins_desc on public.users(coins desc);
 
--- Done
+-- ============================
+-- 6) HELPER: RECOMPUTE ONE BUSINESS
+-- ============================
+create or replace function public.recompute_business_total(
+  p_business text
+) returns jsonb
+language plpgsql
+security definer
+as $$
+declare
+  qty bigint;
+  price bigint;
+begin
+  select coalesce(sum((u.businesses ->> p_business)::bigint),0)
+    into qty
+    from public.users u;
+
+  select coalesce(unit_cost,1000)
+    into price
+    from public.businesses
+    where business = p_business;
+
+  if not found then
+    insert into public.businesses (business, total_coins_invested, unit_cost)
+    values (p_business, qty * 1000, 1000)
+    on conflict do nothing;
+
+    return jsonb_build_object(
+      'success', true,
+      'business', p_business,
+      'total_qty', qty,
+      'total_invested', qty * 1000
+    );
+  end if;
+
+  update public.businesses
+    set total_coins_invested = qty * price
+    where business = p_business;
+
+  return jsonb_build_object(
+    'success', true,
+    'business', p_business,
+    'total_qty', qty,
+    'total_invested', qty * price
+  );
+end;
+$$;
+
+
+-- ============================
+-- 7) INDEXES
+-- ============================
+create index if not exists idx_users_coins_desc on public.users(coins desc);
+create index if not exists idx_users_referrals_desc on public.users(referrals_count desc);
+create index if not exists idx_businesses_total on public.businesses(total_coins_invested desc);
