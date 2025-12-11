@@ -72,7 +72,7 @@ function mapRowToUser(row) {
     lastMine: row.last_mine ?? 0,
     referralsCount: row.referrals_count ?? 0,
     referredBy: row.referred_by ?? null,
-    subscribed: row.subscribed ?? true,
+    subscribed: row.subscribed === null || row.subscribed === undefined ? true : !!row.subscribed,
     createdAt: row.created_at ?? null
   };
 }
@@ -111,6 +111,33 @@ async function sendTelegram(chat, textMsg, opts = {}) {
   }
 }
 
+// ---- RPC helper: manual_refer_by_id with defensive logging ----
+async function callManualRefer(referrerId, referredId, referredUsername) {
+  try {
+    const { data, error } = await supabase.rpc('manual_refer_by_id', {
+      referrer_id: referrerId,
+      referred_id: referredId,
+      referred_username: referredUsername
+    });
+
+    if (error) {
+      console.error('manual_refer_by_id rpc error object:', error);
+      return { ok: false, error };
+    }
+
+    const rpcResult = Array.isArray(data) ? data[0] : data;
+    if (!rpcResult || typeof rpcResult.success === 'undefined') {
+      console.error('manual_refer_by_id unexpected rpc result:', { data });
+      return { ok: false, error: new Error('invalid_rpc_result'), data };
+    }
+
+    return { ok: true, result: rpcResult };
+  } catch (e) {
+    console.error('manual_refer_by_id call failed:', e);
+    return { ok: false, error: e };
+  }
+}
+
 // ---- API routes (user, mine, update, leaderboard, buy) ----
 app.post('/api/user-debug', (req, res) => {
   console.log('DEBUG /api/user-debug body:', req.body);
@@ -144,8 +171,7 @@ app.post('/api/user', async (req, res) => {
       last_mine: 0,
       referrals_count: 0,
       referred_by: null,
-      // NEW: subscribe by default so broadcasts reach new users; users may opt-out later.
-      subscribed: true,
+      subscribed: true, // default to true
     };
 
     const { data: created, error: upsertErr } = await supabase
@@ -499,7 +525,7 @@ app.post(`/telegram/webhook${TELEGRAM_SECRET_PATH ? `/${TELEGRAM_SECRET_PATH}` :
     }
 
     // ---------- Refer / start flows ----------
-    // /refer or /refer <username>
+    // /refer or "Refer 🎁"
     if (text && (text.startsWith('/refer') || text === 'Refer 🎁')) {
       // /refer (no args) -> return referral link
       if (!(text.startsWith('/refer ') || /^\/refer@/i.test(text))) {
@@ -538,75 +564,20 @@ app.post(`/telegram/webhook${TELEGRAM_SECRET_PATH ? `/${TELEGRAM_SECRET_PATH}` :
         }
         const inviter = rows[0];
 
-        // ensure the referred user exists (upsert) to avoid duplicate insert race
-        try {
-          await supabase.from('users').upsert([{
-            id: tgId,
-            username,
-            coins: 100,
-            businesses: {},
-            level: 1,
-            last_mine: 0,
-            referrals_count: 0,
-            referred_by: null,
-            subscribed: true
-          }], { onConflict: 'id' });
-        } catch (e) {
-          console.warn('upsert referred user failed (refer by username)', e?.message || e);
-        }
-
-        // quick guard: if this user is already referred, short-circuit
-        try {
-          const { data: existingRef, error: refErr } = await supabase
-            .from('users')
-            .select('referred_by')
-            .eq('id', tgId)
-            .maybeSingle();
-          if (refErr) throw refErr;
-          if (existingRef && existingRef.referred_by) {
-            await sendTelegram(chatId, "⚠️ You have already been referred and can't be referred again.");
-            return res.json({ ok: false, error: 'already_referred' });
-          }
-        } catch (e) {
-          // continue to RPC if check fails — RPC also handles duplicates
-          console.warn('referrer check failed', e?.message || e);
-        }
-
-        // call RPC by id
-        const { data: rpcData, error: rpcErr } = await supabase.rpc('manual_refer_by_id', {
-          referrer_id: inviter.id,
-          referred_id: tgId,
-          referred_username: username
-        });
-
-        // If RPC returns an error object (network/PG error), try to map duplicate -> already_referred
-        if (rpcErr) {
-          console.error('manual_refer_by_id rpc error (refer by username):', rpcErr);
-
-          const lowerMsg = (rpcErr?.message || '').toString().toLowerCase();
-          const details = (rpcErr?.details || '').toString().toLowerCase();
-
-          if (lowerMsg.includes('duplicate') || lowerMsg.includes('unique') || details.includes('already') || rpcErr?.code === '23505') {
-            await sendTelegram(chatId, "⚠️ You have already been referred or the referral already exists.");
-            return res.json({ ok: false, error: 'already_referred' });
-          }
-
+        // Call RPC (function handles creation and idempotency)
+        const { ok, result, error } = await callManualRefer(inviter.id, tgId, username);
+        if (!ok) {
+          console.error('callManualRefer failed', error);
           await sendTelegram(chatId, '⚠️ Referral system error. Try again later.');
-          return res.json({ ok: false, error: rpcErr.message || rpcErr });
+          return res.json({ ok: false, error });
         }
 
-        const rpcResult = Array.isArray(rpcData) ? rpcData[0] : rpcData;
-        if (!rpcResult) {
-          await sendTelegram(chatId, '⚠️ Referral error. Try again later.');
-          return res.json({ ok: false });
-        }
-
-        if (rpcResult.success === true) {
-          await sendTelegram(chatId, `🎁 You were successfully referred by <b>${rpcResult.inviter_username || targetUsername}</b>!`, { parse_mode: 'HTML' });
-          try { if (rpcResult.inviter_id) await sendTelegram(rpcResult.inviter_id, `🎉 <b>${escapeHtml(username)}</b> joined using your referral!\nYou received +100 💰 coins.`, { parse_mode: 'HTML' }); } catch(e){}
-          return res.json({ ok: true });
+        if (result.success === true) {
+          await sendTelegram(chatId, `🎁 You were successfully referred by <b>${result.inviter_username || targetUsername}</b>!`, { parse_mode: 'HTML' });
+          try { if (result.inviter_id && result.awarded) await sendTelegram(result.inviter_id, `🎉 <b>${escapeHtml(username)}</b> joined using your referral!\nYou received +100 💰 coins.`, { parse_mode: 'HTML' }); } catch(e){}
+          return res.json({ ok: true, result });
         } else {
-          const errCode = rpcResult.error || 'unknown';
+          const errCode = result.error || 'unknown';
           if (errCode === 'inviter_not_found') await sendTelegram(chatId, '❌ Inviter not found in database.');
           else if (errCode === 'self_referral') await sendTelegram(chatId, '😅 You can’t refer yourself!');
           else if (errCode === 'already_referred') await sendTelegram(chatId, "⚠️ You have already been referred or referral couldn't be recorded.");
@@ -631,99 +602,24 @@ app.post(`/telegram/webhook${TELEGRAM_SECRET_PATH ? `/${TELEGRAM_SECRET_PATH}` :
         }
 
         try {
-          // ensure referred user exists (upsert) first to avoid duplicate insert errors
-          try {
-            await supabase.from('users').upsert([{
-              id: tgId,
-              username,
-              coins: 100,
-              businesses: {},
-              level: 1,
-              last_mine: 0,
-              referrals_count: 0,
-              referred_by: null,
-              subscribed: true
-            }], { onConflict: 'id' });
-          } catch (e) {
-            console.warn('upsert referred user failed (start flow)', e?.message || e);
-          }
-
-          // quick guard: check if already referred
-          try {
-            const { data: existingRef, error: refErr } = await supabase
-              .from('users')
-              .select('referred_by')
-              .eq('id', tgId)
-              .maybeSingle();
-            if (refErr) throw refErr;
-            if (existingRef && existingRef.referred_by) {
-              await sendTelegram(chatId, "⚠️ You have already been referred and can't be referred again.");
-              return res.json({ ok: false, error: 'already_referred' });
-            }
-          } catch (e) {
-            console.warn('referred check failed (start)', e?.message || e);
-          }
-
-          const { data: rpcData, error: rpcErr } = await supabase.rpc('manual_refer_by_id', {
-            referrer_id: referrerId,
-            referred_id: tgId,
-            referred_username: username
-          });
-
-          if (rpcErr) {
-            console.error('manual_refer_by_id rpc error (start flow):', rpcErr);
-
-            const lowerMsg = (rpcErr?.message || '').toString().toLowerCase();
-            const details = (rpcErr?.details || '').toString().toLowerCase();
-            if (lowerMsg.includes('duplicate') || lowerMsg.includes('unique') || details.includes('already') || rpcErr?.code === '23505') {
-              await sendTelegram(chatId, "⚠️ You have already been referred or the referral already exists.");
-              return res.json({ ok: false, error: 'already_referred' });
-            }
-
-            // fallback: ensure user exists to avoid repeating join problems (use upsert)
-            try {
-              await supabase.from('users').upsert([{
-                id: tgId,
-                username,
-                coins: 100,
-                businesses: {},
-                level: 1,
-                last_mine: 0,
-                referrals_count: 0,
-                referred_by: null,
-                subscribed: true
-              }], { onConflict: 'id' });
-            } catch (e) {
-              console.warn('create fallback user failed (start) after rpcErr', e?.message || e);
-            }
-
+          // Call RPC (function handles creation and idempotency)
+          const { ok, result, error } = await callManualRefer(referrerId, tgId, username);
+          if (!ok) {
+            console.error('callManualRefer failed', error);
             await sendTelegram(chatId, '⚠️ Referral system error. Try again later.');
-            return res.json({ ok: false, error: rpcErr.message || rpcErr });
+            return res.json({ ok: false, error });
           }
 
-          const rpcResult = Array.isArray(rpcData) ? rpcData[0] : rpcData;
-          if (!rpcResult) {
-            await sendTelegram(chatId, '⚠️ Referral error. Try again later.');
-            return res.json({ ok: false });
-          }
-
-          if (rpcResult.success === true) {
-            await sendTelegram(chatId, `🎁 You were successfully referred by <b>${rpcResult.inviter_username || referrerId}</b>!`, { parse_mode: 'HTML' });
-            try {
-              if (rpcResult.inviter_id) await sendTelegram(rpcResult.inviter_id, `🎉 <b>${escapeHtml(username)}</b> joined using your referral!\nYou received +100 💰 coins.`, { parse_mode: 'HTML' });
-            } catch (e) {}
-            return res.json({ ok: true });
+          if (result.success === true) {
+            await sendTelegram(chatId, `🎁 You were successfully referred by <b>${result.inviter_username || referrerId}</b>!`, { parse_mode: 'HTML' });
+            try { if (result.inviter_id && result.awarded) await sendTelegram(result.inviter_id, `🎉 <b>${escapeHtml(username)}</b> joined using your referral!\nYou received +100 💰 coins.`, { parse_mode: 'HTML' }); } catch (e) {}
+            return res.json({ ok: true, result });
           } else {
-            const errCode = rpcResult.error || 'unknown';
-            if (errCode === 'inviter_not_found') {
-              await sendTelegram(chatId, '❌ Inviter not found in database.');
-            } else if (errCode === 'self_referral') {
-              await sendTelegram(chatId, '😅 You can’t refer yourself!');
-            } else if (errCode === 'already_referred') {
-              await sendTelegram(chatId, "⚠️ You have already been referred or referral couldn't be recorded.");
-            } else {
-              await sendTelegram(chatId, '⚠️ Referral system error. Try again later.');
-            }
+            const errCode = result.error || 'unknown';
+            if (errCode === 'inviter_not_found') await sendTelegram(chatId, '❌ Inviter not found in database.');
+            else if (errCode === 'self_referral') await sendTelegram(chatId, '😅 You can’t refer yourself!');
+            else if (errCode === 'already_referred') await sendTelegram(chatId, "⚠️ You have already been referred or referral couldn't be recorded.");
+            else await sendTelegram(chatId, '⚠️ Referral system error. Try again later.');
             return res.json({ ok: false, error: errCode });
           }
         } catch (err) {
@@ -746,7 +642,6 @@ app.post(`/telegram/webhook${TELEGRAM_SECRET_PATH ? `/${TELEGRAM_SECRET_PATH}` :
                 last_mine: 0,
                 referrals_count: 0,
                 referred_by: null,
-                // NEW: default to subscribed = true
                 subscribed: true
               }], { onConflict: 'id' });
             } catch (e) {
