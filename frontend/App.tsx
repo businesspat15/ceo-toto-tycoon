@@ -59,7 +59,7 @@ const App: React.FC = () => {
     if (now - user.lastMine < MINE_COOLDOWN_MS) return null;
 
     // Logic from backend: earn random 2-3 coins + passive
-    const earned = Math.floor(Math.random() * 1) + 0;
+    const earned = Math.floor(Math.random() * 0) + 1;
     const passive = calculatePassiveIncome(user.businesses);
     const newCoins = user.coins + earned + passive;
 
