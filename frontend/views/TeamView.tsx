@@ -18,7 +18,7 @@ const TeamView: React.FC<TeamViewProps> = ({ user }) => {
     <div className="h-full px-4 pt-8 pb-24 overflow-y-auto bg-slate-900">
       <div className="flex flex-col items-center mb-8">
         <h2 className="text-2xl font-bold text-white mb-2">Team & Referrals 🤝</h2>
-        <p className="text-slate-400 text-center text-sm">Invite friends to build your TOTO empire together.</p>
+        <p className="text-slate-400 text-center text-sm">Invite friends to assist you in becoming CEO.</p>
       </div>
 
       <div className="bg-gradient-to-br from-indigo-900 to-slate-800 rounded-2xl p-6 border border-indigo-700/50 mb-8 relative overflow-hidden">

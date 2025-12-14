@@ -1,6 +1,6 @@
 import { BusinessDef } from './types';
 
-// Derived from index.js provided by user
+
 export const BUSINESSES: BusinessDef[] = [
   { id: 'DAPP', name: 'CIFCI Tech & AI', cost: 1000, income: 1 },
   { id: 'TOTO_VAULT', name: 'CIFCI Crypto & Blockchain', cost: 1000, income: 1 },

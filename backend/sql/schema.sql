@@ -1,8 +1,3 @@
--- ============================================================================
--- CEO TOTO Tycoon - FULL CORRECTED SCHEMA & RPCs (exception handler fix)
--- Run this in Supabase SQL editor or psql (DB owner/admin).
--- ============================================================================
-BEGIN;
 
 -- 1) users table
 create table if not exists public.users (
@@ -301,11 +296,3 @@ $$;
 
 COMMIT;
 
--- ============================================================================
--- Quick verification queries (run manually):
--- insert into public.users (id, username, coins, subscribed) values ('test_u1','tester',10000,true) on conflict (id) do nothing;
--- select public.purchase_business('APPLE','test_u1',2,1000);
--- select public.manual_refer_by_id('inv1','ref1','bob');
--- select * from public.referral_attempts order by created_at desc limit 20;
--- select * from public.businesses;
--- ============================================================================

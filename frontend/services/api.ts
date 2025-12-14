@@ -1,6 +1,6 @@
 // frontend/services/api.ts
 // Frontend now uses the backend for both fetch/create and updates.
-// Ensure VITE_API_URL is set in frontend/.env.local (e.g. VITE_API_URL=https://your-backend.onrender.com)
+// Ensure VITE_API_URL is set in frontend/.env.local 
 
 import { UserState } from '../types';
 
