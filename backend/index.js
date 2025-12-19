@@ -723,32 +723,33 @@ app.post(`/telegram/webhook${TELEGRAM_SECRET_PATH ? `/${TELEGRAM_SECRET_PATH}` :
           return res.json({ ok: false, error: err?.message || err });
         }
       } else {
-        // plain /start -> ensure user exists (use upsert to be idempotent)
-        if (tgId) {
-          try {
-            const usernameSafe = username;
-            try {
-              await supabase.from('users').upsert([{
-                id: tgId,
-                username: usernameSafe,
-                coins: 100,
-                businesses: {},
-                level: 1,
-                last_mine: 0,
-                referrals_count: 0,
-                referred_by: null,
-                subscribed: true
-              }], { onConflict: 'id' });
-            } catch (e) {
-              console.warn('create user on plain /start failed (upsert)', e?.message || e);
-            }
-          } catch (e) {
-            console.warn('create user on plain /start failed', e?.message || e);
-          }
-        }
-        return res.json({ ok: true });
-      }
-    }
+        // plain /start (NO RESET EVER)
+if (tgId) {
+  try {
+    await supabase.from('users').insert({
+      id: tgId,
+      username,
+      coins: 100,
+      businesses: {},
+      level: 1,
+      last_mine: 0,
+      referrals_count: 0,
+      referred_by: null,
+      subscribed: true
+    }, { ignoreDuplicates: true });
+  } catch (e) {
+    console.warn('create user on plain /start failed', e?.message || e);
+  }
+}
+
+await sendTelegram(
+  chatId,
+  `👋 Welcome back!\n\n⛏ Mine daily\n🏢 Build businesses\n🎁 Invite friends`,
+  { parse_mode: 'HTML' }
+);
+
+return res.json({ ok: true });
+
 
     // nothing else handled
     return res.json({ ok: true });
